@@ -190,16 +190,24 @@ def search_contracts(query: str) -> list[dict]:
     keyword = extract_search_keyword(query)
     logging.info(f"Drive検索キーワード: {keyword}")
     for kw in [keyword, "NDA", "秘密保持", "契約"]:
-        response = drive_service.files().list(
-            q=f"name contains '{kw}' and trashed=false",
-            spaces="drive",
-            fields="files(id, name, webViewLink, mimeType, modifiedTime)",
-            orderBy="modifiedTime desc",
-            pageSize=5
-        ).execute()
-        files = response.get("files", [])
-        if files:
-            return files
+        for corpora in ["allDrives", "user"]:
+            try:
+                params = dict(
+                    q=f"name contains '{kw}' and trashed=false",
+                    fields="files(id, name, webViewLink, mimeType, modifiedTime)",
+                    orderBy="modifiedTime desc",
+                    pageSize=5,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora=corpora,
+                )
+                response = drive_service.files().list(**params).execute()
+                files = response.get("files", [])
+                logging.info(f"  [{corpora}] '{kw}' → {len(files)}件")
+                if files:
+                    return files
+            except Exception as e:
+                logging.warning(f"  [{corpora}] '{kw}' 検索エラー: {e}")
     return []
 
 def post_file_to_slack(file: dict, channel: str, thread_ts: str, client) -> bool:
