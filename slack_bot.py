@@ -242,15 +242,13 @@ def download_as_docx(file: dict) -> tuple[bytes, str]:
     if mime == "application/vnd.google-apps.document":
         data = drive_service.files().export(
             fileId=file_id,
-            mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            supportsAllDrives=True
+            mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ).execute()
         return data, name + ".docx"
     elif mime == "application/vnd.google-apps.spreadsheet":
         data = drive_service.files().export(
             fileId=file_id,
-            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            supportsAllDrives=True
+            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ).execute()
         return data, name + ".xlsx"
     else:
@@ -415,20 +413,41 @@ def handle_message(event, say, client):
     # タビ男がいるスレッド内の返信には自動で反応（メンション不要）
     if not thread_ts:
         return  # スレッド返信でなければ無視
+
+    clean_text = re.sub(r'<@[A-Z0-9]+>', '', text).strip()
+    if not clean_text:
+        return
+
+    # 契約書キーワードが含まれていればDrive検索に回す
+    if any(kw in text for kw in CONTRACT_KEYWORDS):
+        sig_info = extract_signature_info(clean_text)
+        has_sig  = any(v for v in sig_info.values())
+        say(text="契約書を検索してWordでお持ちします...", thread_ts=thread_ts)
+        files = search_contracts(text)
+        if files:
+            ok, err = post_file_to_slack(files[0], channel, thread_ts, client,
+                                         signature_info=sig_info if has_sig else None)
+            if not ok:
+                say(text=f"⚠️ エラー：{err}\n📄 <{files[0]['webViewLink']}|{files[0]['name']}>",
+                    thread_ts=thread_ts)
+        else:
+            say(text="該当するファイルが見つかりませんでした。", thread_ts=thread_ts)
+        return
+
     try:
         replies = client.conversations_replies(channel=channel, ts=thread_ts)
         msgs = replies.get("messages", [])
-        # タビ男がそのスレッドで発言済みか確認
         bot_posted = any(m.get("bot_id") for m in msgs)
         if not bot_posted:
             return
     except Exception:
         return
 
-    # スレッド履歴付きで返答
-    clean_text = re.sub(r'<@[A-Z0-9]+>', '', text).strip()
-    if not clean_text:
+    # スレッド履歴付きで返答（ファイル操作に関するコメントは無視）
+    ignore_keywords = ["ファイルが来ない", "リンクは届いてる", "頑張れ", "ポンコツ"]
+    if any(kw in text for kw in ignore_keywords):
         return
+
     bot_id  = slack_app.client.auth_test()["user_id"]
     history = get_thread_history(client, channel, thread_ts, bot_id)
     response = ask_claude(clean_text, history=history)
