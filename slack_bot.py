@@ -218,18 +218,26 @@ def download_as_docx(file: dict) -> tuple[bytes, str]:
     if mime == "application/vnd.google-apps.document":
         data = drive_service.files().export(
             fileId=file_id,
-            mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            supportsAllDrives=True
         ).execute()
         return data, name + ".docx"
     elif mime == "application/vnd.google-apps.spreadsheet":
         data = drive_service.files().export(
             fileId=file_id,
-            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            supportsAllDrives=True
         ).execute()
         return data, name + ".xlsx"
     else:
-        data = drive_service.files().get_media(fileId=file_id).execute()
-        return data, name
+        import googleapiclient.http
+        request = drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        buf = io.BytesIO()
+        downloader = googleapiclient.http.MediaIoBaseDownload(buf, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return buf.getvalue(), name
 
 def extract_signature_info(text: str) -> dict:
     """メッセージから署名情報をClaudeで抽出する"""
@@ -276,15 +284,18 @@ def fill_docx_signature(docx_bytes: bytes, info: dict) -> bytes:
     return out.getvalue()
 
 def post_file_to_slack(file: dict, channel: str, thread_ts: str, client,
-                       signature_info: dict = None) -> bool:
+                       signature_info: dict = None) -> tuple[bool, str]:
     """ファイルをWordとしてSlackに投稿する（署名情報があれば転記）"""
     try:
         data, upload_name = download_as_docx(file)
+        logging.info(f"ダウンロード完了: {upload_name} ({len(data)}bytes)")
+
         if signature_info and upload_name.endswith(".docx"):
             filled = fill_docx_signature(data, signature_info)
             if filled:
                 data = filled
                 upload_name = upload_name.replace(".docx", "_記入済.docx")
+
         client.files_upload_v2(
             channel=channel,
             thread_ts=thread_ts,
@@ -292,11 +303,12 @@ def post_file_to_slack(file: dict, channel: str, thread_ts: str, client,
             filename=upload_name,
             title=file["name"]
         )
-        logging.info(f"Slackにファイル投稿完了: {upload_name}")
-        return True
+        logging.info(f"Slack投稿完了: {upload_name}")
+        return True, ""
     except Exception as e:
-        logging.error(f"ファイル投稿エラー: {e}")
-        return False
+        err = str(e)
+        logging.error(f"ファイル投稿エラー: {err}")
+        return False, err
 
 # ─── Slack イベントハンドラ ────────────────────────────────────────────────────
 
@@ -319,10 +331,11 @@ def handle_mention(event, say, client):
         files = search_contracts(text)
         if files:
             for f in files[:1]:
-                ok = post_file_to_slack(f, channel, thread_ts, client,
-                                        signature_info=sig_info if has_sig else None)
+                ok, err = post_file_to_slack(f, channel, thread_ts, client,
+                                             signature_info=sig_info if has_sig else None)
                 if not ok:
-                    say(text=f"📄 <{f['webViewLink']}|{f['name']}>", thread_ts=thread_ts)
+                    say(text=f"⚠️ ファイル投稿エラー：{err}\n📄 <{f['webViewLink']}|{f['name']}>",
+                        thread_ts=thread_ts)
         else:
             say(text="該当するファイルが見つかりませんでした。別のキーワードで試してみてください。",
                 thread_ts=thread_ts)
