@@ -59,14 +59,36 @@ TABIO_SYSTEM = """あなたは不動産M&A会社のAIアシスタント「タビ
 「できません」「アクセスできません」「直接行うことができません」とは絶対に言わないでください。
 契約書・雛形を求められたら必ず検索を実行し、ファイルを返してください。"""
 
-def ask_claude(user_message: str, system: str = TABIO_SYSTEM) -> str:
+def ask_claude(user_message: str, system: str = TABIO_SYSTEM,
+               history: list = None) -> str:
+    messages = history if history else []
+    messages = messages + [{"role": "user", "content": user_message}]
     response = claude.messages.create(
         model="claude-opus-4-6",
         max_tokens=1500,
         system=system,
-        messages=[{"role": "user", "content": user_message}]
+        messages=messages
     )
     return response.content[0].text
+
+def get_thread_history(client, channel: str, thread_ts: str, bot_user_id: str) -> list:
+    """スレッドの会話履歴をClaude形式で取得する"""
+    try:
+        result = client.conversations_replies(channel=channel, ts=thread_ts)
+        messages = result.get("messages", [])[:-1]  # 最新メッセージは除く（今処理中のもの）
+        history = []
+        for msg in messages:
+            text = re.sub(r'<@[A-Z0-9]+>', '', msg.get("text", "")).strip()
+            if not text:
+                continue
+            if msg.get("bot_id"):
+                history.append({"role": "assistant", "content": text})
+            else:
+                history.append({"role": "user", "content": text})
+        return history
+    except Exception as e:
+        logging.warning(f"履歴取得エラー: {e}")
+        return []
 
 # ─── 日報パース ───────────────────────────────────────────────────────────────
 
@@ -347,8 +369,10 @@ def handle_mention(event, say, client):
         say(text=summary, thread_ts=thread_ts)
         return
 
-    # 一般質問 → Claude
-    response = ask_claude(clean_text)
+    # 一般質問 → Claude（スレッド履歴を渡す）
+    bot_id  = slack_app.client.auth_test()["user_id"]
+    history = get_thread_history(client, channel, thread_ts, bot_id)
+    response = ask_claude(clean_text, history=history)
     say(text=response, thread_ts=thread_ts)
 
 
