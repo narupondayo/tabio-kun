@@ -1,5 +1,5 @@
 """
-ハリソン - Slack AI社員
+タビ男 - Slack AI社員
 機能:
   - @メンションで質問に回答（Claude AI）
   - 日報を自動検出 → GoogleスプレッドシートにKPI記録
@@ -287,6 +287,6 @@ if __name__ == "__main__":
     scheduler = BackgroundScheduler(timezone="Asia/Tokyo")
     scheduler.add_job(morning_summary_job, "cron", hour=9, minute=0)
     scheduler.start()
-    logging.info("ハリソン起動中...")
+    logging.info("タビ男起動中...")
     handler = SocketModeHandler(slack_app, os.environ["SLACK_APP_TOKEN"])
     handler.start()
