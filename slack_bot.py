@@ -377,23 +377,49 @@ def handle_mention(event, say, client):
 
 
 @slack_app.event("message")
-def handle_message(event, say):
+def handle_message(event, say, client):
     if event.get("bot_id") or event.get("subtype"):
         return
     text      = event.get("text", "")
-    thread_ts = event.get("thread_ts") or event.get("ts")
-    if not is_daily_report(text):
+    channel   = event.get("channel", "")
+    thread_ts = event.get("thread_ts")  # スレッド返信のみ（Noneならメインチャンネル投稿）
+
+    # 日報検出
+    if is_daily_report(text):
+        ts = thread_ts or event.get("ts")
+        say(text="📝 日報を受け取りました。スプレッドシートに記録中...", thread_ts=ts)
+        try:
+            report = parse_daily_report(text)
+            write_report_to_sheets(report)
+            person = report.get("person", "不明")
+            date   = report.get("date", "")
+            say(text=f"✅ *{person}* さんの {date} 日報を記録しました！", thread_ts=ts)
+        except Exception as e:
+            logging.error(f"日報処理エラー: {e}")
+            say(text="⚠️ 日報の処理でエラーが発生しました。", thread_ts=ts)
         return
-    say(text="📝 日報を受け取りました。スプレッドシートに記録中...", thread_ts=thread_ts)
+
+    # タビ男がいるスレッド内の返信には自動で反応（メンション不要）
+    if not thread_ts:
+        return  # スレッド返信でなければ無視
     try:
-        report = parse_daily_report(text)
-        write_report_to_sheets(report)
-        person = report.get("person", "不明")
-        date   = report.get("date", "")
-        say(text=f"✅ *{person}* さんの {date} 日報を記録しました！", thread_ts=thread_ts)
-    except Exception as e:
-        logging.error(f"日報処理エラー: {e}")
-        say(text="⚠️ 日報の処理でエラーが発生しました。", thread_ts=thread_ts)
+        replies = client.conversations_replies(channel=channel, ts=thread_ts)
+        msgs = replies.get("messages", [])
+        # タビ男がそのスレッドで発言済みか確認
+        bot_posted = any(m.get("bot_id") for m in msgs)
+        if not bot_posted:
+            return
+    except Exception:
+        return
+
+    # スレッド履歴付きで返答
+    clean_text = re.sub(r'<@[A-Z0-9]+>', '', text).strip()
+    if not clean_text:
+        return
+    bot_id  = slack_app.client.auth_test()["user_id"]
+    history = get_thread_history(client, channel, thread_ts, bot_id)
+    response = ask_claude(clean_text, history=history)
+    say(text=response, thread_ts=thread_ts)
 
 # ─── 定期タスク（毎朝9時）────────────────────────────────────────────────────
 
