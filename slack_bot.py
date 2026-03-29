@@ -210,37 +210,92 @@ def search_contracts(query: str) -> list[dict]:
                 logging.warning(f"  [{corpora}] '{kw}' 検索エラー: {e}")
     return []
 
-def post_file_to_slack(file: dict, channel: str, thread_ts: str, client) -> bool:
-    """Google DriveのファイルをダウンロードしてSlackに直接投稿する"""
-    file_id   = file["id"]
-    file_name = file["name"]
-    mime      = file.get("mimeType", "")
+def download_as_docx(file: dict) -> tuple[bytes, str]:
+    """Google DriveのファイルをWordバイト列として取得する"""
+    file_id  = file["id"]
+    mime     = file.get("mimeType", "")
+    name     = file["name"]
+    if mime == "application/vnd.google-apps.document":
+        data = drive_service.files().export(
+            fileId=file_id,
+            mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ).execute()
+        return data, name + ".docx"
+    elif mime == "application/vnd.google-apps.spreadsheet":
+        data = drive_service.files().export(
+            fileId=file_id,
+            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ).execute()
+        return data, name + ".xlsx"
+    else:
+        data = drive_service.files().get_media(fileId=file_id).execute()
+        return data, name
+
+def extract_signature_info(text: str) -> dict:
+    """メッセージから署名情報をClaudeで抽出する"""
+    result = ask_claude(
+        f"以下のメッセージから署名・当事者情報をJSONで抽出してください。情報がなければ空のJSONを返してください。\n\nメッセージ：{text}",
+        system='署名情報を抽出します。{"甲": "", "乙": "", "甲住所": "", "乙住所": "", "甲代表者": "", "乙代表者": "", "日付": ""}の形式のJSONのみ返してください。'
+    )
     try:
-        if mime == "application/vnd.google-apps.document":
-            data = drive_service.files().export(
-                fileId=file_id,
-                mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            ).execute()
-            upload_name = file_name + ".docx"
-        elif mime == "application/vnd.google-apps.spreadsheet":
-            data = drive_service.files().export(
-                fileId=file_id,
-                mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ).execute()
-            upload_name = file_name + ".xlsx"
-        else:
-            data = drive_service.files().get_media(fileId=file_id).execute()
-            upload_name = file_name
+        match = re.search(r'\{.*\}', result, re.DOTALL)
+        return json.loads(match.group()) if match else {}
+    except Exception:
+        return {}
+
+def fill_docx_signature(docx_bytes: bytes, info: dict) -> bytes:
+    """Wordファイルの署名欄に情報を転記する"""
+    from docx import Document
+    doc = Document(io.BytesIO(docx_bytes))
+
+    def replace_in_text(text: str) -> str:
+        replacements = {
+            "【甲】": info.get("甲", ""), "（甲）": info.get("甲", ""),
+            "【乙】": info.get("乙", ""), "（乙）": info.get("乙", ""),
+            "【甲住所】": info.get("甲住所", ""), "【乙住所】": info.get("乙住所", ""),
+            "【甲代表者】": info.get("甲代表者", ""), "【乙代表者】": info.get("乙代表者", ""),
+            "【日付】": info.get("日付", ""), "令和　　年　　月　　日": info.get("日付", ""),
+        }
+        for k, v in replacements.items():
+            if v:
+                text = text.replace(k, v)
+        return text
+
+    for para in doc.paragraphs:
+        for run in para.runs:
+            run.text = replace_in_text(run.text)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        run.text = replace_in_text(run.text)
+
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
+
+def post_file_to_slack(file: dict, channel: str, thread_ts: str, client,
+                       signature_info: dict = None) -> bool:
+    """ファイルをWordとしてSlackに投稿する（署名情報があれば転記）"""
+    try:
+        data, upload_name = download_as_docx(file)
+        if signature_info and upload_name.endswith(".docx"):
+            filled = fill_docx_signature(data, signature_info)
+            if filled:
+                data = filled
+                upload_name = upload_name.replace(".docx", "_記入済.docx")
         client.files_upload_v2(
             channel=channel,
             thread_ts=thread_ts,
             file=io.BytesIO(data),
             filename=upload_name,
-            title=file_name
+            title=file["name"]
         )
+        logging.info(f"Slackにファイル投稿完了: {upload_name}")
         return True
     except Exception as e:
-        logging.error(f"ファイル取得エラー: {e}")
+        logging.error(f"ファイル投稿エラー: {e}")
         return False
 
 # ─── Slack イベントハンドラ ────────────────────────────────────────────────────
@@ -255,13 +310,17 @@ def handle_mention(event, say, client):
     thread_ts = event.get("thread_ts") or event.get("ts")
     clean_text = re.sub(r'<@[A-Z0-9]+>', '', text).strip()
 
-    # 契約書 → Driveから検索してSlackに直接投稿
+    # 契約書 → Driveから検索してWordとしてSlackに直接投稿
     if any(kw in text for kw in CONTRACT_KEYWORDS):
-        say(text="契約書を検索してお持ちします...", thread_ts=thread_ts)
+        sig_info = extract_signature_info(clean_text)
+        has_sig  = any(v for v in sig_info.values())
+        msg = "契約書を検索して署名情報を転記します..." if has_sig else "契約書を検索してWordでお持ちします..."
+        say(text=msg, thread_ts=thread_ts)
         files = search_contracts(text)
         if files:
-            for f in files[:2]:
-                ok = post_file_to_slack(f, channel, thread_ts, client)
+            for f in files[:1]:
+                ok = post_file_to_slack(f, channel, thread_ts, client,
+                                        signature_info=sig_info if has_sig else None)
                 if not ok:
                     say(text=f"📄 <{f['webViewLink']}|{f['name']}>", thread_ts=thread_ts)
         else:
