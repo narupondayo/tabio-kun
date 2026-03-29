@@ -53,11 +53,13 @@ SHEET_NAME           = "日報データ"
 # ─── Claude ──────────────────────────────────────────────────────────────────
 
 TABIO_SYSTEM = """あなたは不動産M&A会社のAIアシスタント「タビ男」です。
-日本語で端的に回答してください。余計な表や長い説明は不要です。
+日本語で端的に回答してください。
 
-重要：あなたはGoogle DriveとGoogleスプレッドシートに実際にアクセスできます。
-「できません」「アクセスできません」「直接行うことができません」とは絶対に言わないでください。
-契約書・雛形を求められたら必ず検索を実行し、ファイルを返してください。"""
+ルール：
+- 質問・相談には簡潔に答える
+- 「できません」とは絶対に言わない
+- 余計な質問・確認・謝罪・絵文字は不要
+- ファイル送信・Drive操作はシステムが自動で行うので、あなたはそれについて言及しない"""
 
 def ask_claude(user_message: str, system: str = TABIO_SYSTEM,
                history: list = None) -> str:
@@ -308,6 +310,7 @@ def fill_docx_signature(docx_bytes: bytes, info: dict) -> bytes:
 def post_file_to_slack(file: dict, channel: str, thread_ts: str, client,
                        signature_info: dict = None) -> tuple[bool, str]:
     """ファイルをWordとしてSlackに投稿する（署名情報があれば転記）"""
+    import tempfile, os as _os
     try:
         data, upload_name = download_as_docx(file)
         logging.info(f"ダウンロード完了: {upload_name} ({len(data)}bytes)")
@@ -318,13 +321,23 @@ def post_file_to_slack(file: dict, channel: str, thread_ts: str, client,
                 data = filled
                 upload_name = upload_name.replace(".docx", "_記入済.docx")
 
-        client.files_upload_v2(
-            channel=channel,
-            thread_ts=thread_ts,
-            file=io.BytesIO(data),
-            filename=upload_name,
-            title=file["name"]
-        )
+        # 一時ファイルに書き出してからアップロード（最も確実な方法）
+        suffix = _os.path.splitext(upload_name)[1] or ".docx"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+
+        try:
+            client.files_upload_v2(
+                channel=channel,
+                thread_ts=thread_ts,
+                file=tmp_path,
+                filename=upload_name,
+                title=file["name"]
+            )
+        finally:
+            _os.unlink(tmp_path)
+
         logging.info(f"Slack投稿完了: {upload_name}")
         return True, ""
     except Exception as e:
