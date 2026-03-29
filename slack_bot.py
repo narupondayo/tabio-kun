@@ -219,7 +219,7 @@ def handle_mention(event, say):
     clean_text = re.sub(r'<@[A-Z0-9]+>', '', text).strip()
 
     # 契約書検索
-    if any(kw in text for kw in ["契約書", "ひな型", "テンプレ"]):
+    if any(kw in text for kw in ["契約書", "ひな型", "テンプレ", "NDA", "秘密保持", "雛形", "ひな形", "基本合意", "意向表明", "LOI", "MOA"]):
         say(text="契約書を検索中です...", thread_ts=thread_ts)
         files = search_contracts(text)
         if files:
