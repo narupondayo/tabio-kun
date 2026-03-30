@@ -50,7 +50,7 @@ SPREADSHEET_ID       = os.environ["SPREADSHEET_ID"]
 DAILY_REPORT_CHANNEL = os.environ.get("DAILY_REPORT_CHANNEL", "")
 
 def _tabio_folder():
-    return os.environ.get("TABIO_FOLDER_ID", "")
+    return os.environ.get("DRIVE_COPY_ID", "")
 SHEET_NAME           = "日報データ"
 
 # ─── Claude ──────────────────────────────────────────────────────────────────
