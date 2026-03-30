@@ -2,6 +2,9 @@ slack-bolt
 anthropic
 google-api-python-client
 google-auth
+google-auth-httplib2
+google-auth-oauthlib
+httplib2==0.20.4
 apscheduler
 python-dotenv
 python-docx

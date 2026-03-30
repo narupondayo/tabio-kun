@@ -43,8 +43,8 @@ def _get_google_creds():
     return service_account.Credentials.from_service_account_info(info, scopes=GOOGLE_SCOPES)
 
 google_creds   = _get_google_creds()
-sheets_service = build("sheets", "v4",  credentials=google_creds)
-drive_service  = build("drive",  "v3",  credentials=google_creds)
+sheets_service = build("sheets", "v4", credentials=google_creds, cache_discovery=False)
+drive_service  = build("drive",  "v3", credentials=google_creds, cache_discovery=False)
 
 SPREADSHEET_ID       = os.environ["SPREADSHEET_ID"]
 DAILY_REPORT_CHANNEL = os.environ.get("DAILY_REPORT_CHANNEL", "")
