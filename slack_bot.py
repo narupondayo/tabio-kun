@@ -43,6 +43,12 @@ def _get_google_creds():
     return service_account.Credentials.from_service_account_info(info, scopes=GOOGLE_SCOPES)
 
 google_creds   = _get_google_creds()
+
+# httplib2の代わりにrequestsを使って安定性を向上
+import google.auth.transport.requests as _google_requests
+_auth_req = _google_requests.Request()
+google_creds.refresh(_auth_req)
+
 sheets_service = build("sheets", "v4", credentials=google_creds, cache_discovery=False)
 drive_service  = build("drive",  "v3", credentials=google_creds, cache_discovery=False)
 
