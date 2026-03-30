@@ -392,7 +392,20 @@ def handle_mention(event, say, client):
         say(text="契約書を検索しています...", thread_ts=thread_ts)
         files = search_contracts(text)
         if files:
-            f = files[0]
+            # 複数ヒット時はClaudeが最適なファイルを選ぶ
+            if len(files) == 1:
+                f = files[0]
+            else:
+                file_list = "\n".join([f"{i+1}. {fl['name']}" for i, fl in enumerate(files)])
+                pick = ask_claude(
+                    f"ユーザーのリクエスト「{clean_text}」に最も合致するファイルの番号を1つだけ返してください。数字のみ。\n\n{file_list}",
+                    system="最適なファイルの番号のみ返してください。"
+                )
+                try:
+                    idx = int(pick.strip()) - 1
+                    f = files[idx] if 0 <= idx < len(files) else files[0]
+                except:
+                    f = files[0]
             try:
                 copied = copy_to_tabio_folder(f)
                 say(text=f"📄 コピーを作成しました。こちらから編集できます：\n<{copied['webViewLink']}|{copied['name']}>\n\n元のひな形は変更されていません。",
@@ -423,6 +436,9 @@ def handle_message(event, say, client):
     if event.get("bot_id") or event.get("subtype"):
         return
     text      = event.get("text", "")
+    # メンション（@タビ男）はhandle_mentionが処理するのでスキップ
+    if re.search(r'<@[A-Z0-9]+>', text):
+        return
     channel   = event.get("channel", "")
     thread_ts = event.get("thread_ts")  # スレッド返信のみ（Noneならメインチャンネル投稿）
 
