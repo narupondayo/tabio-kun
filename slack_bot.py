@@ -48,7 +48,9 @@ drive_service  = build("drive",  "v3", credentials=google_creds, cache_discovery
 
 SPREADSHEET_ID       = os.environ["SPREADSHEET_ID"]
 DAILY_REPORT_CHANNEL = os.environ.get("DAILY_REPORT_CHANNEL", "")
-TABIO_FOLDER_ID      = os.environ.get("TABIO_FOLDER_ID", "")  # タビ男君_編集用フォルダID
+
+def _tabio_folder():
+    return os.environ.get("TABIO_FOLDER_ID", "")
 SHEET_NAME           = "日報データ"
 
 # ─── Claude ──────────────────────────────────────────────────────────────────
@@ -314,8 +316,9 @@ def copy_to_tabio_folder(file: dict) -> dict:
     timestamp = datetime.now().strftime("%m%d_%H%M")
     new_name = f"{file['name']}（作業用_{timestamp}）"
     body = {"name": new_name}
-    if TABIO_FOLDER_ID:
-        body["parents"] = [TABIO_FOLDER_ID]
+    folder_id = _tabio_folder()
+    if folder_id:
+        body["parents"] = [folder_id]
     copied = drive_service.files().copy(
         fileId=file["id"],
         body=body,
