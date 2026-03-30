@@ -48,6 +48,7 @@ drive_service  = build("drive",  "v3",  credentials=google_creds)
 
 SPREADSHEET_ID       = os.environ["SPREADSHEET_ID"]
 DAILY_REPORT_CHANNEL = os.environ.get("DAILY_REPORT_CHANNEL", "")
+TABIO_FOLDER_ID      = os.environ.get("TABIO_FOLDER_ID", "")  # タビ男君_編集用フォルダID
 SHEET_NAME           = "日報データ"
 
 # ─── Claude ──────────────────────────────────────────────────────────────────
@@ -307,6 +308,23 @@ def fill_docx_signature(docx_bytes: bytes, info: dict) -> bytes:
     doc.save(out)
     return out.getvalue()
 
+def copy_to_tabio_folder(file: dict) -> dict:
+    """ひな形をタビ男君_編集用フォルダにコピーして返す"""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%m%d_%H%M")
+    new_name = f"{file['name']}（作業用_{timestamp}）"
+    body = {"name": new_name}
+    if TABIO_FOLDER_ID:
+        body["parents"] = [TABIO_FOLDER_ID]
+    copied = drive_service.files().copy(
+        fileId=file["id"],
+        body=body,
+        supportsAllDrives=True,
+        fields="id, name, webViewLink"
+    ).execute()
+    logging.info(f"コピー作成: {copied['name']}")
+    return copied
+
 def post_file_to_slack(file: dict, channel: str, thread_ts: str, client,
                        signature_info: dict = None) -> tuple[bool, str]:
     """ファイルをWordとしてSlackに投稿する（署名情報があれば転記）"""
@@ -360,20 +378,19 @@ def handle_mention(event, say, client):
     thread_ts = event.get("thread_ts") or event.get("ts")
     clean_text = re.sub(r'<@[A-Z0-9]+>', '', text).strip()
 
-    # 契約書 → Driveから検索してWordとしてSlackに直接投稿
+    # 契約書 → Driveから検索してタビ男君フォルダにコピー→リンク投稿
     if any(kw in text for kw in CONTRACT_KEYWORDS):
-        sig_info = extract_signature_info(clean_text)
-        has_sig  = any(v for v in sig_info.values())
-        msg = "契約書を検索して署名情報を転記します..." if has_sig else "契約書を検索してWordでお持ちします..."
-        say(text=msg, thread_ts=thread_ts)
+        say(text="契約書を検索しています...", thread_ts=thread_ts)
         files = search_contracts(text)
         if files:
-            for f in files[:1]:
-                ok, err = post_file_to_slack(f, channel, thread_ts, client,
-                                             signature_info=sig_info if has_sig else None)
-                if not ok:
-                    say(text=f"⚠️ ファイル投稿エラー：{err}\n📄 <{f['webViewLink']}|{f['name']}>",
-                        thread_ts=thread_ts)
+            f = files[0]
+            try:
+                copied = copy_to_tabio_folder(f)
+                say(text=f"📄 コピーを作成しました。こちらから編集できます：\n<{copied['webViewLink']}|{copied['name']}>\n\n元のひな形は変更されていません。",
+                    thread_ts=thread_ts)
+            except Exception as e:
+                logging.error(f"コピーエラー: {e}")
+                say(text=f"📄 <{f['webViewLink']}|{f['name']}>", thread_ts=thread_ts)
         else:
             say(text="該当するファイルが見つかりませんでした。別のキーワードで試してみてください。",
                 thread_ts=thread_ts)
@@ -425,16 +442,16 @@ def handle_message(event, say, client):
 
     # 契約書キーワードが含まれていればDrive検索に回す
     if any(kw in text for kw in CONTRACT_KEYWORDS):
-        sig_info = extract_signature_info(clean_text)
-        has_sig  = any(v for v in sig_info.values())
-        say(text="契約書を検索してWordでお持ちします...", thread_ts=thread_ts)
+        say(text="契約書を検索しています...", thread_ts=thread_ts)
         files = search_contracts(text)
         if files:
-            ok, err = post_file_to_slack(files[0], channel, thread_ts, client,
-                                         signature_info=sig_info if has_sig else None)
-            if not ok:
-                say(text=f"⚠️ エラー：{err}\n📄 <{files[0]['webViewLink']}|{files[0]['name']}>",
+            f = files[0]
+            try:
+                copied = copy_to_tabio_folder(f)
+                say(text=f"📄 コピーを作成しました：\n<{copied['webViewLink']}|{copied['name']}>",
                     thread_ts=thread_ts)
+            except Exception as e:
+                say(text=f"📄 <{f['webViewLink']}|{f['name']}>", thread_ts=thread_ts)
         else:
             say(text="該当するファイルが見つかりませんでした。", thread_ts=thread_ts)
         return
