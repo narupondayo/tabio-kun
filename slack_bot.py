@@ -393,14 +393,16 @@ def handle_mention(event, say, client):
         files = search_contracts(text)
         if files:
             # 複数ヒット時はClaudeが最適なファイルを選ぶ
+            file_list = "\n".join([f"{i+1}. {fl['name']}" for i, fl in enumerate(files)])
+            logging.info(f"候補ファイル一覧:\n{file_list}")
             if len(files) == 1:
                 f = files[0]
             else:
-                file_list = "\n".join([f"{i+1}. {fl['name']}" for i, fl in enumerate(files)])
                 pick = ask_claude(
-                    f"ユーザーのリクエスト「{clean_text}」に最も合致するファイルの番号を1つだけ返してください。数字のみ。\n\n{file_list}",
-                    system="最適なファイルの番号のみ返してください。"
+                    f"ユーザーのリクエスト：「{clean_text}」\n\n以下のファイル一覧から最も合致するものの番号を1つだけ返してください。数字のみ。\n\n{file_list}",
+                    system="ファイル一覧の中からユーザーのリクエストに最も合致するファイルの番号のみ返してください。説明不要。"
                 )
+                logging.info(f"Claude選択: {pick.strip()} → {files[int(pick.strip())-1]['name'] if pick.strip().isdigit() else '不明'}")
                 try:
                     idx = int(pick.strip()) - 1
                     f = files[idx] if 0 <= idx < len(files) else files[0]
